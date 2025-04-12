@@ -5,13 +5,11 @@ write a proper test file
 """
 # Loading the libraries
 from atom import ATOMClassifier
-from atom.feature_engineering import FeatureSelector
 from sklearn.decomposition import PCA
-from sklearn.pipeline import Pipeline
 from sklearn.utils import resample
 from pathlib import Path
 from sklearn.model_selection import RepeatedStratifiedKFold, StratifiedKFold
-from sklearn.metrics import accuracy_score, precision_score, recall_score, fbeta_score, matthews_corrcoef, average_precision_score, f1_score, make_scorer
+from sklearn.metrics import balanced_accuracy_score, precision_score, recall_score, fbeta_score, matthews_corrcoef, f1_score, make_scorer
 import os
 import joblib
 import numpy as np
@@ -36,43 +34,6 @@ class Utils():
         scaler = joblib.load(scaler_path)
         imputer = joblib.load(imputer_path)
         return scaler, imputer
-
-    def create_pipeline(
-        self,
-        model: object,
-        scaler: bool = False,
-        feature_selector: Optional[object] = None,
-        imputer: Optional[object] = None,
-    ):
-        """
-        Creates a pipeline for the model.
-        Args:
-            model: The model object.
-            scaler: Whether to use a scaler.
-            feature_selector: The feature selector object,
-            imputer: The imputer object.
-        Returns:
-            pipeline: The pipeline object.
-        """
-        # Initialize the steps for the pipeline
-        steps = []
-        # Add the scaler and imputer if needed
-        if scaler:
-            scaler, imputer = self.load_scaler_and_imputer()
-            steps.append(('imputer', imputer))
-            steps.append(('scaler', scaler))
-        else:
-            steps.append(('imputer', 'passthrough'))
-            steps.append(('scaler', 'passthrough'))
-        # Add the feature selector
-        if feature_selector is not None:
-            steps.append(('feature_selector', feature_selector))
-        else:
-            steps.append(('feature_selector', 'passthrough'))
-        # Add the model to the pipeline
-        steps.append(('model', model))
-        pipeline = Pipeline(steps)
-        return pipeline
     
     def calculate_statistics(self, scores: List[float]):
         """
@@ -145,7 +106,6 @@ class RNcvAtom:
             n_splits: int = 5, 
             n_trials: int = 50, 
             inner_cv: object|int = StratifiedKFold(n_splits=3),
-            fs: str = 'pca',
             seed=42
             ):
         self.X = X
@@ -156,7 +116,6 @@ class RNcvAtom:
         self.n_splits = n_splits
         self.n_trials = n_trials
         self.inner_cv = inner_cv
-        self.fs = fs
         self.seed = seed
         self.results = []
 
@@ -165,24 +124,19 @@ class RNcvAtom:
         Runs the repeated n-fold cross-validation.
         """
         f2_weighted = make_scorer(fbeta_score, beta=2, average="weighted", zero_division=0)
-
         rkf = RepeatedStratifiedKFold(
             n_splits=self.n_splits,
             n_repeats=self.n_repeats,
             random_state=self.seed
         )
-        
         for fold_idx, (train_idx, test_idx) in enumerate(rkf.split(self.X, self.y)):     
             print(f"Processing fold: {fold_idx}")
-            
             X_train, X_test = self.X.iloc[train_idx], self.X.iloc[test_idx]
             y_train, y_test = self.y.iloc[train_idx], self.y.iloc[test_idx]
-
             # Perform feature selection
             pca = PCA(n_components=10)
             X_train_transformed = pca.fit_transform(X_train)
-            X_test_transformed = pca.transform(X_test)
-                        
+            X_test_transformed = pca.transform(X_test) 
             for model in self.models:
                 # Create a new ATOM instance for the model training
                 model_atom = ATOMClassifier(X_train_transformed, y_train, random_state=self.seed + fold_idx, verbose=2)
@@ -194,14 +148,12 @@ class RNcvAtom:
                     ht_params={'cv': self.inner_cv}
                 )
                 best_model = model_atom.winner
-                
                 # Make predictions on the transformed test data
                 y_pred = best_model.predict(X_test_transformed)
-                
                 self.results.append({
                     "model": model,
                     "fold": fold_idx,
-                    "accuracy": accuracy_score(y_test, y_pred),
+                    "accuracy": balanced_accuracy_score(y_test, y_pred),
                     "precision": precision_score(y_test, y_pred, average="weighted", zero_division=0),
                     "recall": recall_score(y_test, y_pred, average="weighted", zero_division=0),
                     "f1": f1_score(y_test, y_pred, average="weighted", zero_division=0),
