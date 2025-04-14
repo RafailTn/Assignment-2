@@ -18,7 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-from typing import Optional, List, Dict
+from typing import Any, Optional, List, Dict
 class Utils():
     def __init__(self):
         pass
@@ -38,6 +38,11 @@ class Utils():
         return scaler, imputer
     
     def get_best_from_folds(self, results: pd.DataFrame):
+        """
+        Gets the best model from the results of the inner cross-validation by counting the best model across folds.
+        Args:
+            results (pd.DataFrame): DataFrame with results of the cross-validation.
+        """
         results_df = pd.read_csv(results, header=0)
         model_name = results_df["model"].values
         # Rank models by frequency
@@ -97,15 +102,19 @@ class RNcvAtom:
     '''
     Class to run repeated n-fold cross-validation for a list of models.
     Args:
-        X (pd.DataFrame): DataFrame with features.
-        y (pd.Series): Series with target variable.
-        models (List[object]): List of models to evaluate.
-        param_spaces (Dict[object, List[object]]): Dictionary with model names as keys and lists of parameter values as values.
-        n_repeats (int): Number of times to repeat the cross-validation.
-        n_splits (int): Number of splits for the cross-validation.
-        n_trials (int): Number of trials for the optimization.
-        inner_cv (int): Number of folds for the inner cross-validation.
-        seed (int): Random seed for reproducibility.
+        X (pd.DataFrame): DataFrame with features (must contain a 'diagnosis' column).
+        y (pd.Series): Series with target variable (must be a binary classification problem).
+        models (List[str]): List of models to evaluate.
+        param_spaces (Dict[str, List[object]]): Dictionary with model names as keys and lists of parameter values as values.
+            If None, the default parameter spaces will be used.
+        n_repeats (int): Number of times to repeat the cross-validation (default: 10).
+        n_splits (int): Number of splits for the cross-validation (default: 5).
+        fs (bool): Whether to perform feature selection (default: False).
+        fs_method (object): Feature selection method to use (default: FeatureSelector(strategy="pca", n_features=10)).
+        n_trials (int): Number of trials for the optimization (default: 50).
+        inner_cv (int): Number of folds for the inner cross-validation (default: StratifiedKFold(n_splits=3)).
+        metric (object): Metric to use for evaluation (default: make_scorer(fbeta_score, beta=2, average="weighted", zero_division=0)).
+        seed (int): Random seed for reproducibility (default: 42).
     '''
     def __init__(
             self, 
@@ -198,9 +207,15 @@ class RNcvAtom:
 
     def fine_tune(
         self,
-        model: object,
+        model: List[str],
         metric: object = make_scorer(fbeta_score, beta=2, average="weighted", zero_division=0),
     ):
+        """
+        Fine-tunes the provided model(s) on the provided data.
+        Args:
+            model (List[str]): List of models to fine-tune.
+            metric (object): Metric to use for evaluation.
+        """
         rkf = RepeatedStratifiedKFold(
             n_splits=self.n_splits,
             n_repeats=self.n_repeats,
@@ -221,10 +236,12 @@ class RNcvAtom:
             n_trials=self.n_trials,
             ht_params={'cv': self.inner_cv}
             )
+            # Get the best model
             best_model = model_atom.winner
+            winner_name = best_model.name
             self.best_model_results.append({
-                "model": model.__class__.__name__,
-                "hyper_params": model_atom.est_params[best_model],
+                "model": winner_name,
+                "hyper_params": model_atom[winner_name].estimator.get_params(),
                 "fold": fold_idx,
                 "accuracy": balanced_accuracy_score(y_test, best_model.predict(X_test_transformed)),
                 "precision": precision_score(y_test, best_model.predict(X_test_transformed), average="weighted", zero_division=0),
@@ -238,8 +255,18 @@ class RNcvAtom:
         self, 
         train_set: pd.DataFrame, 
         eval_set: pd.DataFrame, 
-        n_samples: int = 1000
+        n_samples: int = 1000,
+        model: object = None,
+        est_params: Dict[str, Any] = None
         ):
+        """
+        Performs bootstrapping on the provided data.
+        Args:
+            train_set (pd.DataFrame): DataFrame with training data.
+            eval_set (pd.DataFrame): DataFrame with evaluation data.
+            n_samples (int): Number of samples to generate.
+            model (List[str]): List of models to evaluate.
+        """
         x = train_set.drop(columns=["diagnosis"])
         y = train_set["diagnosis"]
         x_val = eval_set.drop(columns=["diagnosis"])
@@ -253,17 +280,37 @@ class RNcvAtom:
             X_test_transformed = x_val
         # Create a new ATOM instance for the model training
         model_atom = ATOMClassifier(X_train_transformed, y, random_state=self.seed, verbose=2)
-        model_atom.run(models=self.models, metric=self.metric, ht_params={'cv': self.inner_cv})
-        for i in range(n_samples):
-            # Resample the data
-            x_boot, y_boot = resample(X_test_transformed, y_val, random_state=self.seed + i)
-            
-            for model_name in model_atom.models:
-                model = model_atom[model_name]
+        # Check if a specific model is provided
+        if not model:
+            model_atom.run(models=self.models, metric=self.metric, ht_params={'cv': self.inner_cv})
+            for i in range(n_samples):
+                # Resample the data
+                x_boot, y_boot = resample(X_test_transformed, y_val, random_state=self.seed + i)
+                # Iterate over the models
+                for model_name in model_atom.models:
+                    model = model_atom[model_name]
+                    # Make predictions on the transformed test data
+                    y_pred = model.predict(x_boot)
+                    self.results_bootstrap.append({
+                        "model": model_name,
+                        "accuracy": balanced_accuracy_score(y_boot, y_pred),
+                        "precision": precision_score(y_boot, y_pred, average="weighted", zero_division=0),
+                        "recall": recall_score(y_boot, y_pred, average="weighted", zero_division=0),
+                        "f1": f1_score(y_boot, y_pred, average="weighted", zero_division=0),
+                        "f2": fbeta_score(y_boot, y_pred, beta=2, average="weighted", zero_division=0),
+                        "mcc": matthews_corrcoef(y_boot, y_pred),
+                    })
+
+        else:
+            model_atom.run(models=model, metric=self.metric, ht_params={'cv': self.inner_cv}, est_params=est_params)
+            for i in range(n_samples):
+                # Resample the data
+                x_boot, y_boot = resample(X_test_transformed, y_val, random_state=self.seed + i)
+                # Iterate over the models
                 # Make predictions on the transformed test data
-                y_pred = model.predict(x_boot)
+                y_pred = model_atom.winner.predict(x_boot)
                 self.results_bootstrap.append({
-                    "model": model_name,
+                    "model": model_atom.winner.name,
                     "accuracy": balanced_accuracy_score(y_boot, y_pred),
                     "precision": precision_score(y_boot, y_pred, average="weighted", zero_division=0),
                     "recall": recall_score(y_boot, y_pred, average="weighted", zero_division=0),
@@ -271,7 +318,7 @@ class RNcvAtom:
                     "f2": fbeta_score(y_boot, y_pred, beta=2, average="weighted", zero_division=0),
                     "mcc": matthews_corrcoef(y_boot, y_pred),
                 })
-
+        
     def get_best_from_inner_cv(self):
         return pd.DataFrame(self.results_baseline_per_fold)
 
