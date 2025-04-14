@@ -230,7 +230,7 @@ class RNcvAtom:
             y_train, y_test = self.y.iloc[train_idx], self.y.iloc[test_idx]
             # Perform feature selection
             if self.fs:
-                X_train_transformed = self.fs_method.fit_transform(X_train)
+                X_train_transformed = self.fs_method.fit_transform(X_train, y_train)
                 X_test_transformed = self.fs_method.transform(X_test)
             else:
                 X_train_transformed = X_train
@@ -307,7 +307,7 @@ class RNcvAtom:
             X_train, X_test = self.X.iloc[train_idx], self.X.iloc[test_idx]
             y_train, y_test = self.y.iloc[train_idx], self.y.iloc[test_idx]
             # Perform feature selection
-            X_train_transformed = self.fs_method.fit_transform(X_train)
+            X_train_transformed = self.fs_method.fit_transform(X_train, y_train)
             X_test_transformed = self.fs_method.transform(X_test)
             # Create a new ATOM instance for the model training
             model_atom = ATOMClassifier(X_train_transformed, y_train, random_state=self.seed + fold_idx, verbose=2)
@@ -353,7 +353,7 @@ class RNcvAtom:
         y_val = eval_set["diagnosis"]
         # Perform feature selection
         if self.fs:
-            X_train_transformed = self.fs_method.fit_transform(x)
+            X_train_transformed = self.fs_method.fit_transform(x,y)
             X_test_transformed = self.fs_method.transform(x_val)
         else:
             X_train_transformed = x
