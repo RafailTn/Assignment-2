@@ -195,7 +195,7 @@ class RNcvAtom:
 
     def baseline_run(
             self,
-            model: List[object] = None
+            model_inst: List[object] = None
             ):
         """
         Runs the repeated n-fold cross-validation.
@@ -218,7 +218,7 @@ class RNcvAtom:
                 X_test_transformed = X_test
             # Create a new ATOM instance for the model training
             model_atom = ATOMClassifier(X_train_transformed, y_train, random_state=self.seed + fold_idx, verbose=2)
-            if not model:
+            if not model_inst:
                 # Train the model on the transformed training data
                 model_atom.run(
                     models=self.models,
@@ -244,12 +244,12 @@ class RNcvAtom:
                 self.results_baseline_per_fold.append({
                     "model": winner,
                     "fold": fold_idx,
-                    "Metric": winner.score()
+                    "Metric": model_atom.metric
                 })
             else:
                 # Train the model on the transformed training data
                 model_atom.run(
-                    models=model,
+                    models=model_inst,
                     metric=self.metric,
                     ht_params={'cv': self.inner_cv},
                 )
@@ -318,7 +318,7 @@ class RNcvAtom:
         train_set: pd.DataFrame, 
         eval_set: pd.DataFrame, 
         n_samples: int = 1000,
-        model: List[object] = None,
+        model_inst: List[object] = None,
         ):
         """
         Performs bootstrapping on the provided data.
@@ -342,7 +342,7 @@ class RNcvAtom:
         # Create a new ATOM instance for the model training
         model_atom = ATOMClassifier(X_train_transformed, y, random_state=self.seed, verbose=2)
         # Check if a specific model is provided
-        if not model:
+        if not model_inst:
             model_atom.run(models=self.models, metric=self.metric, ht_params={'cv': self.inner_cv})
             for i in range(n_samples):
                 # Resample the data
@@ -363,7 +363,7 @@ class RNcvAtom:
                     })
 
         else:
-            model_atom.run(models=model, metric=self.metric, ht_params={'cv': self.inner_cv})
+            model_atom.run(models=model_inst, metric=self.metric, ht_params={'cv': self.inner_cv})
             for i in range(n_samples):
                 # Resample the data
                 x_boot, y_boot = resample(X_test_transformed, y_val, random_state=self.seed + i)
