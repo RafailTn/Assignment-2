@@ -11,9 +11,9 @@ from sklearn.decomposition import PCA
 from sklearn.utils import resample
 from pathlib import Path
 from sklearn.model_selection import RepeatedStratifiedKFold, StratifiedKFold
+from sklearn.pipeline import Pipeline
 from sklearn.metrics import balanced_accuracy_score, precision_score, recall_score, fbeta_score, matthews_corrcoef, f1_score, make_scorer
 from collections import Counter
-import os
 import joblib
 import numpy as np
 import matplotlib.pyplot as plt
@@ -123,6 +123,23 @@ class Utils():
             else:
                 print(full_df[col].value_counts())
 
+    def make_winner_pipeline(
+            self, 
+            model: object, 
+        ):
+        """
+        Creates a pipeline for the provided model.
+        Args:
+            model (object): List of objects to be used as the final estimator.
+        """
+        scaler, imputer = self.load_scaler_and_imputer()
+        pipeline = Pipeline([
+            ('imputer', imputer),
+            ('scaler', scaler),
+            ('fs', PCA(n_components=10)),
+            ('model', model)
+        ])
+        return pipeline
 
 class RNcvAtom:
     '''
@@ -146,7 +163,7 @@ class RNcvAtom:
             self, 
             X: pd.DataFrame,
             y: pd.Series,
-            models: List[str],
+            models: List[str]|List[object],
             param_spaces: Dict[str, List[object]] = None,
             n_repeats: int = 10, 
             n_splits: int = 5,
@@ -176,7 +193,10 @@ class RNcvAtom:
         self.best_model_results = []
         self.results_bootstrap = []
 
-    def baseline_run(self):
+    def baseline_run(
+            self,
+            model: List[object] = None
+            ):
         """
         Runs the repeated n-fold cross-validation.
         """
@@ -198,18 +218,46 @@ class RNcvAtom:
                 X_test_transformed = X_test
             # Create a new ATOM instance for the model training
             model_atom = ATOMClassifier(X_train_transformed, y_train, random_state=self.seed + fold_idx, verbose=2)
-            # Train the model on the transformed training data
-            model_atom.run(
-                models=self.models,
-                metric=self.metric,
-                ht_params={'cv': self.inner_cv},
-            )
-            for model_name in model_atom.models:
-                model = model_atom[model_name]
-                # Make predictions on the transformed test data
-                y_pred = model.predict(X_test_transformed)
+            if not model:
+                # Train the model on the transformed training data
+                model_atom.run(
+                    models=self.models,
+                    metric=self.metric,
+                    ht_params={'cv': self.inner_cv},
+                )
+                for model_name in model_atom.models:
+                    model = model_atom[model_name]
+                    # Make predictions on the transformed test data, for every model
+                    y_pred = model.predict(X_test_transformed)
+                    self.results.append({
+                        "model": model_name,
+                        "fold": fold_idx,
+                        "accuracy": balanced_accuracy_score(y_test, y_pred),
+                        "precision": precision_score(y_test, y_pred, average="weighted", zero_division=0),
+                        "recall": recall_score(y_test, y_pred, average="weighted", zero_division=0),
+                        "f1": f1_score(y_test, y_pred, average="weighted", zero_division=0),
+                        "f2": fbeta_score(y_test, y_pred, beta=2, average="weighted", zero_division=0),
+                        "mcc": matthews_corrcoef(y_test, y_pred),
+                    })
+                # Winner per fold and its test performance (outer_cv metrics)
+                winner = model_atom.winner
+                self.results_baseline_per_fold.append({
+                    "model": winner,
+                    "fold": fold_idx,
+                    "Metric": winner.score()
+                })
+            else:
+                # Train the model on the transformed training data
+                model_atom.run(
+                    models=model,
+                    metric=self.metric,
+                    ht_params={'cv': self.inner_cv},
+                )
+                model_obj = model_atom.winner
+                # Make predictions on the transformed test data, for every model
+                y_pred = model_obj.predict(X_test_transformed)
                 self.results.append({
-                    "model": model_name,
+                    "model": model_obj.name,
                     "fold": fold_idx,
                     "accuracy": balanced_accuracy_score(y_test, y_pred),
                     "precision": precision_score(y_test, y_pred, average="weighted", zero_division=0),
@@ -219,23 +267,11 @@ class RNcvAtom:
                     "mcc": matthews_corrcoef(y_test, y_pred),
                 })
 
-            winner = model_atom.winner
-            self.results_baseline_per_fold.append({
-                "model": winner,
-                "fold": fold_idx,
-                "accuracy": balanced_accuracy_score(y_test, winner.predict(X_test_transformed)),
-                "precision": precision_score(y_test, winner.predict(X_test_transformed), average="weighted", zero_division=0),
-                "recall": recall_score(y_test, winner.predict(X_test_transformed), average="weighted", zero_division=0),
-                "f1": f1_score(y_test, winner.predict(X_test_transformed), average="weighted", zero_division=0),
-                "f2": fbeta_score(y_test, winner.predict(X_test_transformed), beta=2, average="weighted", zero_division=0),
-                "mcc": matthews_corrcoef(y_test, winner.predict(X_test_transformed))
-            })
-
     def fine_tune(
         self,
         model: List[str],
         metric: object = make_scorer(fbeta_score, beta=2, average="weighted", zero_division=0),
-    ):
+        ):
         """
         Fine-tunes the provided model(s) on the provided data.
         Args:
@@ -282,8 +318,7 @@ class RNcvAtom:
         train_set: pd.DataFrame, 
         eval_set: pd.DataFrame, 
         n_samples: int = 1000,
-        model: object = None,
-        est_params: Dict[str, Any] = None
+        model: List[object] = None,
         ):
         """
         Performs bootstrapping on the provided data.
@@ -291,7 +326,7 @@ class RNcvAtom:
             train_set (pd.DataFrame): DataFrame with training data.
             eval_set (pd.DataFrame): DataFrame with evaluation data.
             n_samples (int): Number of samples to generate.
-            model (List[str]): List of models to evaluate.
+            model object: Model to evaluate.
         """
         x = train_set.drop(columns=["diagnosis"])
         y = train_set["diagnosis"]
@@ -328,15 +363,16 @@ class RNcvAtom:
                     })
 
         else:
-            model_atom.run(models=model, metric=self.metric, ht_params={'cv': self.inner_cv}, est_params=est_params)
+            model_atom.run(models=model, metric=self.metric, ht_params={'cv': self.inner_cv})
             for i in range(n_samples):
                 # Resample the data
                 x_boot, y_boot = resample(X_test_transformed, y_val, random_state=self.seed + i)
                 # Iterate over the models
                 # Make predictions on the transformed test data
-                y_pred = model_atom.winner.predict(x_boot)
+                trained_model = model_atom.winner
+                y_pred = trained_model.predict(x_boot)
                 self.results_bootstrap.append({
-                    "model": model_atom.winner.name,
+                    "model": trained_model.name,
                     "accuracy": balanced_accuracy_score(y_boot, y_pred),
                     "precision": precision_score(y_boot, y_pred, average="weighted", zero_division=0),
                     "recall": recall_score(y_boot, y_pred, average="weighted", zero_division=0),
