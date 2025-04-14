@@ -5,11 +5,13 @@ write a proper test file
 """
 # Loading the libraries
 from atom import ATOMClassifier
+from atom.feature_engineering import FeatureSelector
 from sklearn.decomposition import PCA
 from sklearn.utils import resample
 from pathlib import Path
 from sklearn.model_selection import RepeatedStratifiedKFold, StratifiedKFold
 from sklearn.metrics import balanced_accuracy_score, precision_score, recall_score, fbeta_score, matthews_corrcoef, f1_score, make_scorer
+from collections import Counter
 import os
 import joblib
 import numpy as np
@@ -35,6 +37,15 @@ class Utils():
         imputer = joblib.load(imputer_path)
         return scaler, imputer
     
+    def get_best_from_folds(self, results: pd.DataFrame):
+        results_df = pd.read_csv(results, header=0)
+        model_name = results_df["model"].values
+        # Rank models by frequency
+        ranked_models = Counter(model_name)
+        ranked_models = ranked_models.most_common()
+        print(f"Best model based on frequency: {ranked_models[0][0]}")
+        print(f"Models ranked by frequency: {ranked_models}")
+
     def calculate_statistics(self, scores: List[float]):
         """
         Calculates the mean, standard deviation, and median of a list of scores.
@@ -103,9 +114,12 @@ class RNcvAtom:
             models: List[str],
             param_spaces: Dict[str, List[object]] = None,
             n_repeats: int = 10, 
-            n_splits: int = 5, 
+            n_splits: int = 5,
+            fs: bool = False,
+            fs_method: object = FeatureSelector(strategy="pca", n_features=10),
             n_trials: int = 50, 
             inner_cv: object|int = StratifiedKFold(n_splits=3),
+            metric: object = make_scorer(fbeta_score, beta=2, average="weighted", zero_division=0),
             seed=42
             ):
         self.X = X
@@ -114,16 +128,23 @@ class RNcvAtom:
         self.param_spaces = param_spaces
         self.n_repeats = n_repeats
         self.n_splits = n_splits
+        self.fs = fs
+        # If feature selection is enabled, set the feature selection method
+        if self.fs:
+            self.fs_method = fs_method
         self.n_trials = n_trials
         self.inner_cv = inner_cv
         self.seed = seed
+        self.metric = metric
         self.results = []
+        self.results_baseline_per_fold = []
+        self.best_model_results = []
+        self.results_bootstrap = []
 
-    def run(self):
+    def baseline_run(self):
         """
         Runs the repeated n-fold cross-validation.
         """
-        f2_weighted = make_scorer(fbeta_score, beta=2, average="weighted", zero_division=0)
         rkf = RepeatedStratifiedKFold(
             n_splits=self.n_splits,
             n_repeats=self.n_repeats,
@@ -134,24 +155,26 @@ class RNcvAtom:
             X_train, X_test = self.X.iloc[train_idx], self.X.iloc[test_idx]
             y_train, y_test = self.y.iloc[train_idx], self.y.iloc[test_idx]
             # Perform feature selection
-            pca = PCA(n_components=10)
-            X_train_transformed = pca.fit_transform(X_train)
-            X_test_transformed = pca.transform(X_test) 
-            for model in self.models:
-                # Create a new ATOM instance for the model training
-                model_atom = ATOMClassifier(X_train_transformed, y_train, random_state=self.seed + fold_idx, verbose=2)
-                # Train the model on the transformed training data
-                model_atom.run(
-                    models=[model],
-                    metric=f2_weighted,
-                    n_trials=self.n_trials,
-                    ht_params={'cv': self.inner_cv}
-                )
-                best_model = model_atom.winner
+            if self.fs:
+                X_train_transformed = self.fs_method.fit_transform(X_train)
+                X_test_transformed = self.fs_method.transform(X_test)
+            else:
+                X_train_transformed = X_train
+                X_test_transformed = X_test
+            # Create a new ATOM instance for the model training
+            model_atom = ATOMClassifier(X_train_transformed, y_train, random_state=self.seed + fold_idx, verbose=2)
+            # Train the model on the transformed training data
+            model_atom.run(
+                models=self.models,
+                metric=self.metric,
+                ht_params={'cv': self.inner_cv},
+            )
+            for model_name in model_atom.models:
+                model = model_atom[model_name]
                 # Make predictions on the transformed test data
-                y_pred = best_model.predict(X_test_transformed)
+                y_pred = model.predict(X_test_transformed)
                 self.results.append({
-                    "model": model,
+                    "model": model_name,
                     "fold": fold_idx,
                     "accuracy": balanced_accuracy_score(y_test, y_pred),
                     "precision": precision_score(y_test, y_pred, average="weighted", zero_division=0),
@@ -161,9 +184,106 @@ class RNcvAtom:
                     "mcc": matthews_corrcoef(y_test, y_pred),
                 })
 
-    def get_results(self):
+            winner = model_atom.winner
+            self.results_baseline_per_fold.append({
+                "model": winner,
+                "fold": fold_idx,
+                "accuracy": balanced_accuracy_score(y_test, winner.predict(X_test_transformed)),
+                "precision": precision_score(y_test, winner.predict(X_test_transformed), average="weighted", zero_division=0),
+                "recall": recall_score(y_test, winner.predict(X_test_transformed), average="weighted", zero_division=0),
+                "f1": f1_score(y_test, winner.predict(X_test_transformed), average="weighted", zero_division=0),
+                "f2": fbeta_score(y_test, winner.predict(X_test_transformed), beta=2, average="weighted", zero_division=0),
+                "mcc": matthews_corrcoef(y_test, winner.predict(X_test_transformed))
+            })
+
+    def fine_tune(
+        self,
+        model: object,
+        metric: object = make_scorer(fbeta_score, beta=2, average="weighted", zero_division=0),
+    ):
+        rkf = RepeatedStratifiedKFold(
+            n_splits=self.n_splits,
+            n_repeats=self.n_repeats,
+            random_state=self.seed
+        )
+        for fold_idx, (train_idx, test_idx) in enumerate(rkf.split(self.X, self.y)):     
+            print(f"Processing fold: {fold_idx}")
+            X_train, X_test = self.X.iloc[train_idx], self.X.iloc[test_idx]
+            y_train, y_test = self.y.iloc[train_idx], self.y.iloc[test_idx]
+            # Perform feature selection
+            X_train_transformed = self.fs_method.fit_transform(X_train)
+            X_test_transformed = self.fs_method.transform(X_test)
+            # Create a new ATOM instance for the model training
+            model_atom = ATOMClassifier(X_train_transformed, y_train, random_state=self.seed + fold_idx, verbose=2)
+            model_atom.run(
+            models=model,
+            metric=metric,
+            n_trials=self.n_trials,
+            ht_params={'cv': self.inner_cv}
+            )
+            best_model = model_atom.winner
+            self.best_model_results.append({
+                "model": model.__class__.__name__,
+                "hyper_params": model_atom.est_params[best_model],
+                "fold": fold_idx,
+                "accuracy": balanced_accuracy_score(y_test, best_model.predict(X_test_transformed)),
+                "precision": precision_score(y_test, best_model.predict(X_test_transformed), average="weighted", zero_division=0),
+                "recall": recall_score(y_test, best_model.predict(X_test_transformed), average="weighted", zero_division=0),
+                "f1": f1_score(y_test, best_model.predict(X_test_transformed), average="weighted", zero_division=0),
+                "f2": fbeta_score(y_test, best_model.predict(X_test_transformed), beta=2, average="weighted", zero_division=0),
+                "mcc": matthews_corrcoef(y_test, best_model.predict(X_test_transformed))
+            })
+
+    def bootstrap(
+        self, 
+        train_set: pd.DataFrame, 
+        eval_set: pd.DataFrame, 
+        n_samples: int = 1000
+        ):
+        x = train_set.drop(columns=["diagnosis"])
+        y = train_set["diagnosis"]
+        x_val = eval_set.drop(columns=["diagnosis"])
+        y_val = eval_set["diagnosis"]
+        # Perform feature selection
+        if self.fs:
+            X_train_transformed = self.fs_method.fit_transform(x)
+            X_test_transformed = self.fs_method.transform(x_val)
+        else:
+            X_train_transformed = x
+            X_test_transformed = x_val
+        # Create a new ATOM instance for the model training
+        model_atom = ATOMClassifier(X_train_transformed, y, random_state=self.seed, verbose=2)
+        model_atom.run(models=self.models, metric=self.metric, ht_params={'cv': self.inner_cv})
+        for i in range(n_samples):
+            # Resample the data
+            x_boot, y_boot = resample(X_test_transformed, y_val, random_state=self.seed + i)
+            
+            for model_name in model_atom.models:
+                model = model_atom[model_name]
+                # Make predictions on the transformed test data
+                y_pred = model.predict(x_boot)
+                self.results_bootstrap.append({
+                    "model": model_name,
+                    "accuracy": balanced_accuracy_score(y_boot, y_pred),
+                    "precision": precision_score(y_boot, y_pred, average="weighted", zero_division=0),
+                    "recall": recall_score(y_boot, y_pred, average="weighted", zero_division=0),
+                    "f1": f1_score(y_boot, y_pred, average="weighted", zero_division=0),
+                    "f2": fbeta_score(y_boot, y_pred, beta=2, average="weighted", zero_division=0),
+                    "mcc": matthews_corrcoef(y_boot, y_pred),
+                })
+
+    def get_best_from_inner_cv(self):
+        return pd.DataFrame(self.results_baseline_per_fold)
+
+    def get_baseline_results(self):
         return pd.DataFrame(self.results)
-        
+    
+    def get_best_model_results(self):
+        return pd.DataFrame(self.best_model_results)
+    
+    def get_bootstrap_results(self):
+        return pd.DataFrame(self.results_bootstrap)
+            
 def main():
     pass
 
