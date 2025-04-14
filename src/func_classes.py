@@ -6,6 +6,7 @@ write a proper test file
 # Loading the libraries
 from atom import ATOMClassifier
 from atom.feature_engineering import FeatureSelector
+import ast
 from sklearn.decomposition import PCA
 from sklearn.utils import resample
 from pathlib import Path
@@ -97,6 +98,31 @@ class Utils():
             ax.legend()
         plt.tight_layout()
         plt.show()
+
+    def process_optuna_results(self, optuna_res):
+        # Convert 'hyper_params' string to actual dict
+        optuna_res["hyper_params"] = optuna_res["hyper_params"].apply(ast.literal_eval)
+        # Expand the hyperparameters into separate columns
+        hyper_df = optuna_res["hyper_params"].apply(pd.Series)
+        # Merge with original metrics (optional)
+        full_df = pd.concat([optuna_res.drop(columns=["hyper_params"]), hyper_df], axis=1)
+        return full_df
+    
+    def plot_optuna_results(self, full_df):
+        for col in full_df.columns:
+            print(f"\n Analyzing: {col}")
+            # If it's numeric, plot histogram
+            # I had to use chatgpt for the next conditional statement that checks the dtype of each column
+            if pd.api.types.is_numeric_dtype(full_df[col]):
+                plt.figure(figsize=(6, 4))
+                sns.histplot(full_df[col], bins=10, kde=True)
+                plt.title(f"Distribution of {col}")
+                plt.xlabel(col)
+                plt.ylabel("Frequency")
+                plt.show()
+            else:
+                print(full_df[col].value_counts())
+
 
 class RNcvAtom:
     '''
