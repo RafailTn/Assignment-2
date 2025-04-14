@@ -124,22 +124,41 @@ class Utils():
                 print(full_df[col].value_counts())
 
     def make_winner_pipeline(
-            self, 
-            model: object, 
+            self,
+            imputer: object,
+            scaler: object,
+            model: object,
+            x: pd.DataFrame,
+            y: pd.Series,
         ):
         """
         Creates a pipeline for the provided model.
         Args:
             model (object): List of objects to be used as the final estimator.
         """
-        scaler, imputer = self.load_scaler_and_imputer()
         pipeline = Pipeline([
             ('imputer', imputer),
             ('scaler', scaler),
             ('fs', PCA(n_components=10)),
             ('model', model)
         ])
-        return pipeline
+        pipeline.fit(x,y)
+        joblib.dump(pipeline, Path.cwd().parent / "models" / "best_model_pipeline.pkl")
+    
+    def pipeline_predict(self, df_path: str):
+        """
+        Predicts the target variable using the pipeline.
+        Args:
+            df_path (str): Path to the DataFrame with features.
+        Returns:
+            pd.Series: Series with predicted target variable.
+        """
+        df = pd.read_csv(df_path)
+        x = df.drop(columns=["diagnosis", 'id'])
+        y = df["diagnosis"]
+        pipeline = joblib.load(Path.cwd().parent / "models" / "best_model_pipeline.pkl")
+        y_pred = pipeline.predict(x)
+        return y_pred
 
 class RNcvAtom:
     '''
