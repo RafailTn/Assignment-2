@@ -7,7 +7,7 @@ LightGBM(),4,fbeta_score
 SupportVectorMachine(),5,fbeta_score
 SupportVectorMachine(),6,fbeta_score
 LightGBM(),7,fbeta_score
-SupportVectorMachine(),8,fbeta_score
+LogisticRegression(),8,fbeta_score
 LogisticRegression(),9,fbeta_score
 LogisticRegression(),10,fbeta_score
 SupportVectorMachine(),11,fbeta_score
@@ -17,7 +17,7 @@ SupportVectorMachine(),14,fbeta_score
 SupportVectorMachine(),15,fbeta_score
 SupportVectorMachine(),16,fbeta_score
 SupportVectorMachine(),17,fbeta_score
-RandomForest(),18,fbeta_score
+SupportVectorMachine(),18,fbeta_score
 SupportVectorMachine(),19,fbeta_score
 SupportVectorMachine(),20,fbeta_score
 LogisticRegression(),21,fbeta_score
@@ -28,7 +28,7 @@ LightGBM(),25,fbeta_score
 LightGBM(),26,fbeta_score
 LightGBM(),27,fbeta_score
 LightGBM(),28,fbeta_score
-LogisticRegression(),29,fbeta_score
+SupportVectorMachine(),29,fbeta_score
 LogisticRegression(),30,fbeta_score
 LogisticRegression(),31,fbeta_score
 SupportVectorMachine(),32,fbeta_score

@@ -7,6 +7,7 @@ write a proper test file
 from atom import ATOMClassifier
 from atom.feature_engineering import FeatureSelector
 import ast
+from imblearn.under_sampling import ClusterCentroids
 from sklearn.decomposition import PCA
 from sklearn.utils import resample
 from pathlib import Path
@@ -159,6 +160,27 @@ class Utils():
         pipeline = joblib.load(Path.cwd().parent / "models" / "best_model_pipeline.pkl")
         y_pred = pipeline.predict(x)
         return y_pred
+    
+    def undersample_cc(self, df: pd.DataFrame):
+        """
+        Undersamples the data using ClusterCentroids.
+        Args:
+            df (pd.DataFrame): DataFrame with features.
+        Returns:
+            pd.DataFrame: DataFrame with undersampled data.
+        """
+        # Create a new DataFrame with the features
+        df_undersampled = df.copy()
+        # Create a new column with the cluster labels
+        x = df_undersampled.drop(columns=["diagnosis"])
+        y = df_undersampled["diagnosis"]
+        # Create a new instance of ClusterCentroids
+        cc = ClusterCentroids(random_state=42)
+        # Undersample the data
+        x_undersampled, y_undersampled = cc.fit_resample(x, y)
+        # Return the undersampled data
+        return pd.concat([y_undersampled, pd.DataFrame(x_undersampled)], axis=1)
+
 
 class RNcvAtom:
     '''
@@ -193,6 +215,7 @@ class RNcvAtom:
             metric: object = make_scorer(fbeta_score, beta=2, average="weighted", zero_division=0),
             seed=42
             ):
+        # Set the parameters
         self.X = X
         self.y = y
         self.models = models
@@ -203,10 +226,12 @@ class RNcvAtom:
         # If feature selection is enabled, set the feature selection method
         if self.fs:
             self.fs_method = fs_method
+        # Set the number of trials, inner CV, seed and metric
         self.n_trials = n_trials
         self.inner_cv = inner_cv
         self.seed = seed
         self.metric = metric
+        # Initialize the results lists
         self.results = []
         self.results_baseline_per_fold = []
         self.best_model_results = []
@@ -219,11 +244,13 @@ class RNcvAtom:
         """
         Runs the repeated n-fold cross-validation.
         """
+        # Initialize the repeated k-fold cross-validation
         rkf = RepeatedStratifiedKFold(
             n_splits=self.n_splits,
             n_repeats=self.n_repeats,
             random_state=self.seed
         )
+        # Iterate over the folds
         for fold_idx, (train_idx, test_idx) in enumerate(rkf.split(self.X, self.y)):     
             print(f"Processing fold: {fold_idx}")
             X_train, X_test = self.X.iloc[train_idx], self.X.iloc[test_idx]
@@ -237,13 +264,15 @@ class RNcvAtom:
                 X_test_transformed = X_test
             # Create a new ATOM instance for the model training
             model_atom = ATOMClassifier(X_train_transformed, y_train, random_state=self.seed + fold_idx, verbose=2)
+            # Check if a specific model is provided
+            # If not, train each model of self.models on the transformed training data
             if not model_inst:
-                # Train the model on the transformed training data
                 model_atom.run(
                     models=self.models,
                     metric=self.metric,
                     ht_params={'cv': self.inner_cv},
                 )
+                # Calculate the performance metrics for each model on the test data (outer_cv)
                 for model_name in model_atom.models:
                     model = model_atom[model_name]
                     # Make predictions on the transformed test data, for every model
@@ -258,7 +287,7 @@ class RNcvAtom:
                         "f2": fbeta_score(y_test, y_pred, beta=2, average="weighted", zero_division=0),
                         "mcc": matthews_corrcoef(y_test, y_pred),
                     })
-                # Winner per fold and its test performance (outer_cv metrics)
+                # Winner per fold 
                 winner = model_atom.winner
                 self.results_baseline_per_fold.append({
                     "model": winner,
