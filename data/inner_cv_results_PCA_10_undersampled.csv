@@ -1,5 +1,5 @@
 model,fold,Metric
-SupportVectorMachine(),0,fbeta_score
+LogisticRegression(),0,fbeta_score
 LogisticRegression(),1,fbeta_score
 SupportVectorMachine(),2,fbeta_score
 LightGBM(),3,fbeta_score

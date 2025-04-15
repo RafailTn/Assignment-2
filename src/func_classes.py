@@ -189,7 +189,7 @@ class RNcvAtom:
         X (pd.DataFrame): DataFrame with features (must contain a 'diagnosis' column).
         y (pd.Series): Series with target variable (must be a binary classification problem).
         models (List[str]): List of models to evaluate.
-        param_spaces (Dict[str, List[object]]): Dictionary with model names as keys and lists of parameter values as values.
+        est_param (Dict[str, List[object]]): Dictionary with model names as keys and lists of parameter values as values.
             If None, the default parameter spaces will be used.
         n_repeats (int): Number of times to repeat the cross-validation (default: 10).
         n_splits (int): Number of splits for the cross-validation (default: 5).
@@ -205,7 +205,7 @@ class RNcvAtom:
             X: pd.DataFrame,
             y: pd.Series,
             models: List[str]|List[object],
-            param_spaces: Dict[str, List[object]] = None,
+            est_param: Dict[str, Dict[str, Any]] = None,
             n_repeats: int = 10, 
             n_splits: int = 5,
             fs: bool = False,
@@ -219,7 +219,7 @@ class RNcvAtom:
         self.X = X
         self.y = y
         self.models = models
-        self.param_spaces = param_spaces
+        self.est_params = est_param
         self.n_repeats = n_repeats
         self.n_splits = n_splits
         self.fs = fs
@@ -271,6 +271,7 @@ class RNcvAtom:
                     models=self.models,
                     metric=self.metric,
                     ht_params={'cv': self.inner_cv},
+                    est_params=self.est_params,
                 )
                 # Calculate the performance metrics for each model on the test data (outer_cv)
                 for model_name in model_atom.models:
@@ -300,6 +301,7 @@ class RNcvAtom:
                     models=model_inst,
                     metric=self.metric,
                     ht_params={'cv': self.inner_cv},
+                    est_params=self.est_params,
                 )
                 model_obj = model_atom.winner
                 # Make predictions on the transformed test data, for every model
@@ -319,12 +321,14 @@ class RNcvAtom:
         self,
         model: List[str],
         metric: object = make_scorer(fbeta_score, beta=2, average="weighted", zero_division=0),
+        model_est_params: Dict[str, Dict[str, Any]] = None,
         ):
         """
         Fine-tunes the provided model(s) on the provided data.
         Args:
             model (List[str]): List of models to fine-tune.
             metric (object): Metric to use for evaluation.
+            model_est_params (Dict[str, Dict[str, Any]]): Dictionary with model names as keys and dictionaries with parameters as values.
         """
         rkf = RepeatedStratifiedKFold(
             n_splits=self.n_splits,
@@ -344,7 +348,8 @@ class RNcvAtom:
             models=model,
             metric=metric,
             n_trials=self.n_trials,
-            ht_params={'cv': self.inner_cv}
+            ht_params={'cv': self.inner_cv},
+            est_params=model_est_params,
             )
             # Get the best model
             best_model = model_atom.winner
@@ -367,6 +372,7 @@ class RNcvAtom:
         eval_set: pd.DataFrame, 
         n_samples: int = 1000,
         model_inst: List[object] = None,
+        model_est_params: Dict[str, Dict[str, Any]] = None,
         ):
         """
         Performs bootstrapping on the provided data.
@@ -391,7 +397,7 @@ class RNcvAtom:
         model_atom = ATOMClassifier(X_train_transformed, y, random_state=self.seed, verbose=2)
         # Check if a specific model is provided
         if not model_inst:
-            model_atom.run(models=self.models, metric=self.metric, ht_params={'cv': self.inner_cv})
+            model_atom.run(models=self.models, metric=self.metric, ht_params={'cv': self.inner_cv}, est_params=self.est_params)
             for i in range(n_samples):
                 # Resample the data
                 x_boot, y_boot = resample(X_test_transformed, y_val, random_state=self.seed + i)
@@ -411,7 +417,7 @@ class RNcvAtom:
                     })
 
         else:
-            model_atom.run(models=model_inst, metric=self.metric, ht_params={'cv': self.inner_cv})
+            model_atom.run(models=model_inst, metric=self.metric, ht_params={'cv': self.inner_cv}, est_params=model_est_params)
             for i in range(n_samples):
                 # Resample the data
                 x_boot, y_boot = resample(X_test_transformed, y_val, random_state=self.seed + i)
